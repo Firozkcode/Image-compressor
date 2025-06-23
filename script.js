@@ -11,22 +11,73 @@ const qualityValue = document.getElementById("qualityValue");
 
 const clearBtn = document.getElementById("clearBtn");
 
-// Modal
+
+// Modal Elements
 const modal = document.getElementById("imageModal");
 const modalImg = document.getElementById("modalImage");
 const modalCaption = document.getElementById("modalCaption");
 const closeModal = document.querySelector(".close");
 
-// Open file picker
-dropArea.addEventListener("click", () => fileInput.click());
 
-// Allow same file reupload
-fileInput.addEventListener("change", (e) => {
-  handleFiles(e.target.files);
-  fileInput.value = ""; // ✅ Important to allow same image re-selection
+const btnText = document.querySelector("#compressBtn .btn-text");
+const btnSpinner = document.querySelector("#compressBtn .btn-spinner");
+
+let aspectRatioLocked = false;
+let originalAspectRatio = null;
+
+const lockAspectRatioCheckbox = document.getElementById("lockAspectRatio");
+
+lockAspectRatioCheckbox.addEventListener("change", () => {
+  aspectRatioLocked = lockAspectRatioCheckbox.checked;
+
+  const firstImg = previewBox.querySelector("div > img");
+  if (aspectRatioLocked && firstImg) {
+    originalAspectRatio = firstImg.naturalWidth / firstImg.naturalHeight;
+  }
 });
 
-// Drag & drop
+
+
+function clearFile(){
+  // Clear file input and preview box
+  fileInput.value = "";
+  previewBox.innerHTML = "";
+  dropArea.style.borderColor = "#999";
+  dropArea.textContent = "Drop files here or click to select";
+  widthInput.value = "";
+  heightInput.value = ""; 
+}
+
+clearFile()
+
+function showSpinner() {
+  spinner.hidden = false;
+}
+
+
+widthInput.addEventListener("input", () => {
+  if (aspectRatioLocked && originalAspectRatio) {
+    heightInput.value = Math.round(parseInt(widthInput.value) / originalAspectRatio);
+  }
+});
+
+heightInput.addEventListener("input", () => {
+  if (aspectRatioLocked && originalAspectRatio) {
+    widthInput.value = Math.round(parseInt(heightInput.value) * originalAspectRatio);
+  }
+});
+
+
+
+// Click to open file picker
+dropArea.addEventListener("click", () => fileInput.click());
+
+// Handle file input selection
+fileInput.addEventListener("change", (e) => {
+  handleFiles(e.target.files);
+});
+
+// Handle drag over and drop
 dropArea.addEventListener("dragover", (e) => {
   e.preventDefault();
   dropArea.style.borderColor = "#333";
@@ -48,6 +99,7 @@ function handleFiles(files) {
   fileArray.forEach((file) => {
     if (!file.type.startsWith("image/")) return;
 
+    // Check if already exists in preview
     const exists = Array.from(previewBox.querySelectorAll("img")).some(
       img => img.dataset.name === file.name && img.dataset.size == file.size
     );
@@ -57,16 +109,54 @@ function handleFiles(files) {
     reader.onload = () => {
       const img = new Image();
       img.src = reader.result;
-      img.dataset.name = file.name;
-      img.dataset.size = file.size;
+        img.dataset.name = file.name;
+        img.dataset.size = file.size;
 
-      img.onload = () => {
-        img.setAttribute("data-width", img.naturalWidth);
-        img.setAttribute("data-height", img.naturalHeight);
-        previewBox.appendChild(img);
+        img.onload = () => {
+            img.setAttribute("data-width", img.naturalWidth);
+            img.setAttribute("data-height", img.naturalHeight);
 
-        const total = previewBox.querySelectorAll("img").length;
-        if (total === 1) {
+            // 🆕 Add remove button
+            const wrapper = document.createElement("div");
+            wrapper.style.position = "relative";
+            wrapper.style.display = "inline-block";
+
+            const removeBtn = document.createElement("span");
+            removeBtn.textContent = "×";
+            removeBtn.style.position = "absolute";
+            removeBtn.style.top = "0";
+            removeBtn.style.right = "0px";
+            removeBtn.style.color = "white";
+            removeBtn.style.background = "red";
+            removeBtn.style.padding = "0 6px";
+            removeBtn.style.cursor = "pointer";
+            removeBtn.style.borderRadius = "0 10px 0 5px";
+            removeBtn.style.fontWeight = "bold";
+            removeBtn.style.userSelect = "none";
+
+            removeBtn.onclick = () => {
+                wrapper.remove();
+
+                const remainingImages = previewBox.querySelectorAll("div > img").length;
+                if (remainingImages === 1) {
+                    const img = previewBox.querySelector("div > img");
+                    widthInput.value = img.dataset.width;
+                    heightInput.value = img.dataset.height;
+                } else {
+                    widthInput.value = "";
+                    heightInput.value = "";
+                }
+            };
+
+
+            wrapper.appendChild(img);
+            wrapper.appendChild(removeBtn);
+            previewBox.appendChild(wrapper);
+
+
+            // Autofill width/height if only 1 image present
+            const total = previewBox.querySelectorAll("img").length;
+            if (total === 1) {
           widthInput.value = img.naturalWidth;
           heightInput.value = img.naturalHeight;
         } else {
@@ -79,63 +169,82 @@ function handleFiles(files) {
   });
 }
 
+
 qualitySlider.addEventListener("input", () => {
-  qualityValue.textContent = qualitySlider.value;
+  qualityValue.textContent = `${qualitySlider.value*100}%`;
 });
 
-// COMPRESSION & DOWNLOAD
 compressBtn.addEventListener("click", () => {
-  const images = previewBox.querySelectorAll("img");
-  if (images.length === 0) return;
+  const images = Array.from(previewBox.querySelectorAll("div > img"));
 
-  const zip = new JSZip();
-  let completed = 0;
+if (images.length === 0) {
+  notificationMessage("error", "Please upload at least one image before compressing.");
+  return;
+}
+  const format = formatSelect.value;
+  const quality = parseFloat(qualitySlider.value);
+  const width = parseInt(widthInput.value);
+  const height = parseInt(heightInput.value);
+
+  const tasks = [];
 
   images.forEach((img, index) => {
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    const tempImage = new Image();
-    tempImage.crossOrigin = "anonymous";
+    tasks.push(new Promise((resolve) => {
+      const canvas = document.createElement("canvas");
+      const ctx = canvas.getContext("2d");
 
-    tempImage.onload = () => {
-      const width = parseInt(widthInput.value) || tempImage.naturalWidth;
-      const height = parseInt(heightInput.value) || tempImage.naturalHeight;
+      const finalWidth = width || img.naturalWidth;
+      const finalHeight = height || img.naturalHeight;
 
-      canvas.width = width;
-      canvas.height = height;
-      ctx.drawImage(tempImage, 0, 0, width, height);
+      canvas.width = finalWidth;
+      canvas.height = finalHeight;
+      ctx.drawImage(img, 0, 0, finalWidth, finalHeight);
 
       canvas.toBlob((blob) => {
-        const ext = getExtFromType(formatSelect.value);
-        const fileName = `compressed-${index + 1}.${ext}`;
-
-        if (images.length === 1) {
-          // Single image = direct download
-          const a = document.createElement("a");
-          a.href = URL.createObjectURL(blob);
-          a.download = fileName;
-          a.click();
-        } else {
-          // Multiple = add to zip
-          zip.file(fileName, blob);
-          completed++;
-
-          // Wait for all images to be added
-          if (completed === images.length) {
-            zip.generateAsync({ type: "blob" }).then((zipBlob) => {
-              const link = document.createElement("a");
-              link.href = URL.createObjectURL(zipBlob);
-              link.download = "compressed-images.zip";
-              link.click();
-            });
-          }
+        if (!blob) {
+          console.error("Compression failed for image", index);
+          resolve();
+          return;
         }
-      }, formatSelect.value, parseFloat(qualitySlider.value));
-    };
 
-    tempImage.src = img.src;
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `compressed-${index + 1}.${getExtFromType(format)}`;
+        a.click();
+        resolve();
+      }, format, quality);
+
+      // Fallback to avoid hanging
+      setTimeout(resolve, 3000);
+    }));
+    clearFile()
+  });
+
+  if (tasks.length === 0) {
+    notificationMessage("error", "No valid images to compress.");
+    return;
+  }
+
+  // ✅ Trigger compression only after confirming tasks exist
+  notificationMessage("processing", "Compressing and downloading your image(s)...");
+
+  btnText.textContent = "Compressing...";
+  btnSpinner.hidden = false;
+  compressBtn.disabled = true;
+
+  Promise.all(tasks).then(() => {
+    btnText.textContent = "Compress & Download";
+    btnSpinner.hidden = true;
+    compressBtn.disabled = false;
+    notificationMessage("success", "Image(s) compressed and downloaded successfully!");
   });
 });
+
+
+
+
+
+
 
 
 function getExtFromType(mimeType) {
@@ -147,23 +256,101 @@ function getExtFromType(mimeType) {
   }
 }
 
-// Clear All
+// Clear button functionality
 clearBtn.addEventListener("click", () => {
   previewBox.innerHTML = "";
   widthInput.value = "";
   heightInput.value = "";
 });
 
-// Modal Preview
+
+
+
+
+
+
+
+
+// Click any preview image to open modal
 previewBox.addEventListener("click", (e) => {
   if (e.target.tagName === "IMG") {
     modal.style.display = "block";
     modalImg.src = e.target.src;
-    modalCaption.textContent = `Resolution: ${e.target.dataset.width} x ${e.target.dataset.height}`;
+
+    const width = e.target.getAttribute("data-width");
+    const height = e.target.getAttribute("data-height");
+    modalCaption.textContent = `Resolution: ${width} x ${height}`;
   }
 });
 
-closeModal.onclick = () => (modal.style.display = "none");
-window.onclick = (e) => {
-  if (e.target === modal) modal.style.display = "none";
+// Close modal
+closeModal.onclick = () => {
+  modal.style.display = "none";
 };
+
+window.onclick = (e) => {
+  if (e.target === modal) {
+    modal.style.display = "none";
+  }
+};
+
+
+
+// Toast notification 
+function notificationMessage(type, messageText) {
+  const notificationContainer = document.getElementById("notificationContainer");
+
+  // Create the notification element
+  const notification = document.createElement("div");
+  notification.className = `notification ${type}`; // Add class for styling
+
+  // Add the message
+  const message = document.createElement("div");
+  message.className = "message";
+  message.textContent = messageText;
+
+  // Add a close button
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "close-btn";
+  closeBtn.innerHTML = "&times;";
+  closeBtn.addEventListener("click", () => {
+      notification.remove();
+  });
+
+  // Add the progress bar
+  const progressBar = document.createElement("div");
+  progressBar.className = "progress-bar";
+
+  // Append elements to the notification
+  notification.appendChild(message);
+  notification.appendChild(closeBtn);
+  notification.appendChild(progressBar);
+
+    // Append the notification to the container
+    notificationContainer.appendChild(notification);
+
+    // Remove the notification after 5 seconds
+    setTimeout(() => {
+        notification.classList.add("slide-out");
+        // Wait for the animation to finish (0.4s), then remove
+        setTimeout(() => {
+            notification.remove();
+        }, 400);
+    }, 5000);
+
+}
+
+// // Example Usage:
+// document.getElementById("notice_text_error").addEventListener("click", () => {
+//   notificationMessage("error", "An error occurred. Please try again.");
+// });
+
+// //  Trigger a processing notification
+// document.getElementById("notice_text_processing").addEventListener("click", () => {
+//   notificationMessage("processing", "Your Request is processing, please wait...");
+// });
+
+// // Trigger a success notification (you can call it anywhere)
+// document.getElementById("notice_text_success").addEventListener("click", () => {
+//   notificationMessage("success", "Completed Successfully!");
+// });
