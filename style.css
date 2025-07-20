@@ -424,4 +424,13 @@ button {
       width: 0;
     }
   }
-  
+
+  footer{
+    margin-top: 20px;
+    font-size: 14px;
+    color: #555;
+    text-align: center;
+    padding: 10px;
+    position: absolute;
+    bottom: 0;;
+  }
